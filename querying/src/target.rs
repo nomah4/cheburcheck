@@ -18,7 +18,7 @@ pub enum Target {
 
 impl From<&str> for Target {
     fn from(input: &str) -> Self {
-        if input.len() > 2 && input[..2].eq_ignore_ascii_case("as") {
+        if input.to_lowercase().starts_with("as") {
             if let Ok(asn) = input[2..].parse::<u32>() {
                 if asn >= 1 {
                     return Target::Asn(asn);
