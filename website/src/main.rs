@@ -5,7 +5,7 @@ mod db;
 mod whitelist;
 
 use crate::db::{check_whitelist, save_query, WhitelistedEntry};
-use log::{error, info, warn};
+use log::{error, info, warn, LevelFilter};
 use querying::resolver::Resolver;
 use querying::target::Target;
 use querying::{Check, CheckError, CheckVerdict, Checker};
@@ -23,6 +23,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use env_logger::Env;
 use rocket::serde::json::Json;
 use sqlx::types::Uuid;
 use sqlx::postgres::PgPool;
@@ -267,10 +268,9 @@ async fn run_migrations(rocket: Rocket<Build>) -> fairing::Result {
 
 #[launch]
 async fn rocket() -> _ {
-    env_logger::builder()
-        .filter_level(log::LevelFilter::Warn)
-        .filter_module("website", log::LevelFilter::Info)
-        .filter_module("querying", log::LevelFilter::Info)
+    env_logger::Builder::from_env(Env::default().default_filter_or("warn"))
+        .filter_module("website", LevelFilter::Info)
+        .filter_module("querying", LevelFilter::Info)
         .init();
 
     let mut interval = time::interval(Duration::from_secs(
@@ -300,7 +300,14 @@ async fn rocket() -> _ {
     });
 
     let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(100)
+        .max_connections(std::env::var("DATABASE_MAX_CONNECTIONS")
+            .unwrap_or("100".to_string())
+            .parse()
+            .unwrap())
+        .min_connections(std::env::var("DATABASE_MIN_CONNECTIONS")
+            .unwrap_or("10".to_string())
+            .parse()
+            .unwrap())
         .acquire_timeout(Duration::from_secs(5))
         .idle_timeout(Duration::from_secs(60))
         .connect(&dotenvy::var("DATABASE_URL").expect("DATABASE_URL must be set"))
