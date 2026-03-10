@@ -1,12 +1,12 @@
-use crate::Db;
 use reports::AgencyReport;
 use rocket::http::Status;
 use rocket::serde::json::serde_json::json;
 use rocket::serde::json::{Json, Value};
 use rocket::serde::msgpack::MsgPack;
 use rocket_client_addr::ClientRealAddr;
-use rocket_db_pools::Connection;
+use rocket::State;
 use sqlx::Acquire;
+use sqlx::postgres::PgPool;
 
 pub struct Agency {
     pub id: i32,
@@ -18,8 +18,9 @@ pub async fn upload_report(
     report: MsgPack<AgencyReport>,
     addr: &ClientRealAddr,
     agency: Agency,
-    mut db: Connection<Db>,
+    pool: &State<PgPool>,
 ) -> Result<Json<Value>, (Status, String)> {
+    let mut db = pool.acquire().await.map_err(|e| (Status::InternalServerError, e.to_string()))?;
     let mut tx = db
         .begin()
         .await
@@ -72,7 +73,7 @@ pub async fn upload_report(
         .await
         .map_err(|e| (Status::InternalServerError, e.to_string()))?;
 
-    sqlx::query!("REFRESH MATERIALIZED VIEW whitelist")
+    sqlx::query!("REFRESH MATERIALIZED VIEW CONCURRENTLY whitelist")
         .execute(&mut *tx)
         .await
         .map_err(|e| (Status::InternalServerError, e.to_string()))?;

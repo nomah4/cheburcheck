@@ -1,20 +1,18 @@
 use crate::agency::Agency;
-use crate::Db;
 use querying::target::Target;
 use querying::{Check, CheckVerdict, Checker};
 use rocket::http::Status;
 use rocket::outcome::{try_outcome, IntoOutcome};
 use rocket::request::{FromRequest, Outcome};
 use rocket::tokio::sync::RwLockReadGuard;
-use rocket::Request;
+use rocket::{Request, State};
 use rocket_client_addr::ClientRealAddr;
-use rocket_db_pools::Connection;
 use serde::Serialize;
 use sqlx::types::chrono::NaiveDateTime;
 use sqlx::types::Uuid;
 
 pub async fn save_query(
-    db: &mut Connection<Db>,
+    db: &mut sqlx::PgConnection,
     target: &Target,
     check: &Check,
     addr: &ClientRealAddr,
@@ -83,7 +81,7 @@ pub async fn save_query(
     .bind(cdn_networks)
     .bind(cdn_providers)
     .bind(rkn_domain)
-    .fetch_one(&mut ***db)
+    .fetch_one(db)
     .await?;
 
     Ok(id)
@@ -91,10 +89,15 @@ pub async fn save_query(
 
 #[rocket::async_trait]
 impl<'r> FromRequest<'r> for Agency {
-    type Error = Option<rocket_db_pools::Error<sqlx::Error>>;
+    type Error = Option<sqlx::Error>;
 
     async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        let mut db = try_outcome!(Connection::<Db>::from_request(request).await);
+        let pool = request.guard::<&State<sqlx::PgPool>>().await.unwrap();
+        let mut db = try_outcome!(pool
+            .acquire()
+            .await
+            .map_err(|e| Some(e))
+            .or_forward(Status::InternalServerError));
         let token = request.headers().get_one("Authorization");
 
         let token = try_outcome!(
@@ -106,9 +109,9 @@ impl<'r> FromRequest<'r> for Agency {
 
         let agency = try_outcome!(
             sqlx::query!("SELECT id, name FROM reporters WHERE token = $1", token)
-                .fetch_optional(&mut **db)
+                .fetch_optional(&mut *db)
                 .await
-                .map_err(|e| Some(rocket_db_pools::Error::Get(e)))
+                .map_err(|e| Some(e))
                 .or_forward(Status::InternalServerError)
         );
         agency
@@ -129,7 +132,7 @@ pub struct WhitelistedEntry {
 
 pub async fn check_whitelist(
     domain: &str,
-    db: &mut Connection<Db>,
+    db: &mut sqlx::PgConnection,
 ) -> Result<Option<WhitelistedEntry>, sqlx::Error> {
     if domain.chars().filter(|c| *c == '.').count() > 4 {
         return Ok(None);
@@ -144,7 +147,7 @@ pub async fn check_whitelist(
         LIMIT 1",
         domain
     )
-    .fetch_optional(&mut ***db)
+    .fetch_optional(db)
     .await
     .into()
 }
@@ -158,7 +161,7 @@ pub struct WhitelistHistogramBin {
 }
 
 pub async fn collect_histogram(
-    db: &mut Connection<Db>,
+    db: &mut sqlx::PgConnection,
     bins: i32,
     limit: i32,
     filter: bool,
@@ -180,7 +183,7 @@ LEFT JOIN whitelist w
 GROUP BY b.bin
 ORDER BY b.bin;", bins, limit / bins, filter
     )
-    .fetch_all(&mut ***db)
+    .fetch_all(db)
     .await
     .into()
 }

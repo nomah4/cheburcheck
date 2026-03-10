@@ -4,8 +4,8 @@ mod agency;
 mod db;
 mod whitelist;
 
-use crate::db::{check_whitelist, save_query};
-use log::error;
+use crate::db::{check_whitelist, save_query, WhitelistedEntry};
+use log::{error, info, warn};
 use querying::resolver::Resolver;
 use querying::target::Target;
 use querying::{Check, CheckError, CheckVerdict, Checker};
@@ -18,7 +18,6 @@ use rocket::tokio::time;
 use rocket::{fairing, tokio, Build, Request, Rocket, State};
 use rocket_cache_response::CacheResponse;
 use rocket_client_addr::ClientRealAddr;
-use rocket_db_pools::{Connection, Database};
 use rocket_dyn_templates::{context, Metadata, Template};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -26,10 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use rocket::serde::json::Json;
 use sqlx::types::Uuid;
-
-#[derive(rocket_db_pools::Database)]
-#[database("cheburcheck")]
-struct Db(sqlx::PgPool);
+use sqlx::postgres::PgPool;
 
 #[derive(Serialize)]
 struct GlobalContext {
@@ -83,13 +79,13 @@ async fn healthcheck(checker: &State<Arc<RwLock<Checker>>>) -> (Status, String) 
 }
 
 #[post("/feedback/<uuid>/<works>")]
-async fn feedback(uuid: &str, works: bool, mut db: Connection<Db>, addr: &ClientRealAddr) -> Result<(), Status> {
+async fn feedback(uuid: &str, works: bool, pool: &State<PgPool>, addr: &ClientRealAddr) -> Result<(), Status> {
     sqlx::query!(
         "INSERT INTO human_reports (id, source_ip, works) VALUES ($1, $2, $3)",
         Uuid::try_parse(uuid).map_err(|_| Status::BadRequest)?,
         addr.ip.to_string(),
         works
-    ).execute(&mut **db).await.map_err(|_| Status::InternalServerError)?;
+    ).execute(&**pool).await.map_err(|_| Status::InternalServerError)?;
 
     Ok(())
 }
@@ -99,12 +95,15 @@ async fn check(
     target: &str,
     checker: &State<Arc<RwLock<Checker>>>,
     addr: &ClientRealAddr,
-    mut db: Connection<Db>,
+    pool: &State<PgPool>,
 ) -> Result<Template, Status> {
     let target = Target::from(target.trim());
     let check = checker.read().await.check(target.clone()).await;
-    let id = if let Ok(check) = &check {
-        match save_query(&mut db, &target, check, addr, checker.read().await).await {
+
+    let mut db = pool.acquire().await.map_err(|_| Status::InternalServerError)?;
+
+    let id: Option<String> = if let Ok(check) = &check {
+        match save_query(&mut *db, &target, check, addr, checker.read().await).await {
             Ok(id) => Some(id.to_string()),
             Err(e) => {
                 warn!("Failed to save check: {:?}", e);
@@ -115,8 +114,8 @@ async fn check(
         None
     };
 
-    let whitelist = if let Target::Domain(domain) = &target {
-        check_whitelist(domain, &mut db)
+    let whitelist: Option<WhitelistedEntry> = if let Target::Domain(domain) = &target {
+        check_whitelist(domain, &mut *db)
             .await
             .map_err(|_| Status::InternalServerError)?
     } else {
@@ -254,8 +253,8 @@ fn format_number(number: usize) -> String {
 }
 
 async fn run_migrations(rocket: Rocket<Build>) -> fairing::Result {
-    match Db::fetch(&rocket) {
-        Some(db) => match sqlx::migrate!("./migrations").run(&**db).await {
+    match rocket.state::<PgPool>() {
+        Some(db) => match sqlx::migrate!("./migrations").run(db).await {
             Ok(_) => Ok(rocket),
             Err(e) => {
                 error!("Failed to run database migrations: {}", e);
@@ -288,27 +287,30 @@ async fn rocket() -> _ {
         info!("Refreshing DB every {:?}", interval.period());
         loop {
             interval.tick().await;
-            log::info!("Updating all DBs");
+            info!("Updating all DBs");
             match Checker::download_all().await {
                 Ok(bases) => {
-                    log::info!("Downloaded, updating...");
+                    info!("Downloaded, updating...");
                     checker_clone.read().await.update_all(bases).await;
-                    log::info!("Updated databases");
+                    info!("Updated databases");
                 },
                 Err(e) => log::error!("Failed to download all DBs"),
             }
         }
     });
 
-    let figment = rocket::Config::figment().merge((
-        "databases.cheburcheck.url",
-        dotenvy::var("DATABASE_URL").expect("DATABASE_URL must be set"),
-    ));
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(100)
+        .acquire_timeout(Duration::from_secs(5))
+        .idle_timeout(Duration::from_secs(60))
+        .connect(&dotenvy::var("DATABASE_URL").expect("DATABASE_URL must be set"))
+        .await
+        .expect("Failed to create database pool");
 
-    rocket::custom(figment)
+    rocket::build()
         .manage(Resolver::new().await)
         .manage(checker)
-        .attach(Db::init())
+        .manage(pool)
         .attach(AdHoc::try_on_ignite("SQLx Migrations", run_migrations))
         .mount("/", routes![index, check, healthcheck, page, feedback])
         .mount("/vendor", routes![lucide, chartjs, chartjs_datalabels])
