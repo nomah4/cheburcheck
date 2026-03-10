@@ -44,6 +44,12 @@ impl CdnList {
         CdnList { trie: IpnetTrie::new() }
     }
 
+    pub fn load<R: Read>(list_reader: R) -> Result<Self, Error> {
+        let mut list = Self::new();
+        list.update(list_reader)?;
+        Ok(list)
+    }
+
     pub fn update<R: Read>(&mut self, list_reader: R) -> Result<(), Error>  {
         let mut trie = IpnetTrie::new();
         let mut rdr = csv::Reader::from_reader(list_reader);
@@ -95,6 +101,12 @@ impl RuBlacklist {
             domain_trie: TrieBuilder::new().build(),
             domain_count: 0
         }
+    }
+
+    pub fn load<R: BufRead>(ip_reader: R, domain_reader: R, custom_domains_reader: R) -> Result<Self, Error> {
+        let mut list = Self::new();
+        list.update(ip_reader, domain_reader, custom_domains_reader)?;
+        Ok(list)
     }
 
     pub fn update<R: BufRead>(&mut self, ip_reader: R, domain_reader: R, custom_domains_reader: R) -> Result<(), Error>  {

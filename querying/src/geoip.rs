@@ -43,6 +43,12 @@ impl GeoIp {
         }
     }
 
+    pub fn load(asn: Vec<u8>, country: Vec<u8>, city: Vec<u8>) -> Result<Self, MaxMindDbError> {
+        let mut geoip = Self::new();
+        geoip.update(asn, country, city)?;
+        Ok(geoip)
+    }
+
     pub fn update(&mut self, asn: Vec<u8>, country: Vec<u8>, city: Vec<u8>) -> Result<(), MaxMindDbError>  {
         self.asn = Some(maxminddb::Reader::from_source(asn)?);
         self.country = Some(maxminddb::Reader::from_source(country)?);
