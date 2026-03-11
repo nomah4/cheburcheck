@@ -256,7 +256,7 @@ h1.error-code {
 }
 .blocked-theme h2, .blocked-theme .status-icon, .blocked-theme .subheading { color: var(--red-color); }
 .blocked-theme .reason-header { border-bottom: 1px solid var(--red-border); color: #f87171; }
-.blocked-theme .alert-box {
+.blocked-theme .alert-box, .warning-note {
     border: 1px solid var(--red-border);
     background: var(--red-bg-subtle);
     color: #f87171;
@@ -789,4 +789,15 @@ h1.error-code {
     .blocked-prefix-list-container {
         align-items: flex-end;
     }
+}
+
+.warning-note {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem;
+    font-size: 1.25rem;
+}
+.warning-note a {
+    color: inherit;
 }
