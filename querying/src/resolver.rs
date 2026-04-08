@@ -1,5 +1,6 @@
 use hickory_resolver::config::{LookupIpStrategy, ResolverConfig, ResolverOpts};
 use hickory_resolver::name_server::TokioConnectionProvider;
+use hickory_resolver::proto::ProtoErrorKind;
 use std::io::{Error, ErrorKind};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -54,10 +55,12 @@ impl Resolver {
 
     pub async fn lookup_ips(&self, domain: &str) -> Result<Vec<IpAddr>, ResolveError> {
         Ok(self.resolver.lookup_ip(domain).await
-            .map_err(|e| if e.kind.is_no_records_found() {
-                ResolveError::NxDomain
-            } else {
-                ResolveError::Other(Error::new(ErrorKind::Other, e))
+            .map_err(|e| match e.kind() {
+                ProtoErrorKind::NoRecordsFound(..) => ResolveError::NxDomain,
+                ProtoErrorKind::Msg(msg) 
+                    if msg.contains("Malformed label") || 
+                       msg.contains("invalid characters") => ResolveError::NxDomain,
+                _ => ResolveError::Other(Error::new(ErrorKind::Other, e))
             })?
             .into_iter().collect())
     }
