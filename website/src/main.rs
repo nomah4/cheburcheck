@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate rocket;
 mod agency;
+mod api;
 mod db;
 mod whitelist;
 
@@ -298,6 +299,12 @@ async fn rocket() -> _ {
         }
     });
 
+    let rate_limit_rpm: u32 = std::env::var("API_RATE_LIMIT_RPM")
+        .unwrap_or("30".to_string())
+        .parse()
+        .unwrap_or(30);
+    let api_limiter = std::sync::Arc::new(api::build_rate_limiter(rate_limit_rpm));
+
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(std::env::var("DATABASE_MAX_CONNECTIONS")
             .unwrap_or("100".to_string())
@@ -316,9 +323,12 @@ async fn rocket() -> _ {
     rocket::build()
         .manage(checker)
         .manage(pool)
+        .manage(api_limiter)
         .attach(AdHoc::try_on_ignite("SQLx Migrations", run_migrations))
         .mount("/", routes![index, check, healthcheck, page, feedback])
         .mount("/vendor", routes![lucide, chartjs, chartjs_datalabels])
+        .mount("/api/v1", routes![api::check])
+        .register("/api", catchers![api_error])
         .mount("/agency", routes![agency::upload_report])
         .mount("/whitelist", routes![whitelist::histogram, whitelist::export_csv])
         .register("/agency", catchers![api_error])
