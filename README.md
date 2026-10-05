@@ -44,6 +44,29 @@
 * `reports` — общий протокол для отправки отчетов
 * `website` — исходный код веб-сайта
 
+## Разработка и проверка
+
+Требуются Rust/Cargo, PostgreSQL и переменная `DATABASE_URL`. Из корня workspace:
+
+```bash
+cargo build --workspace
+cargo test --workspace
+DATABASE_URL=postgresql://USER:PASSWORD@localhost/cheburcheck cargo run -p website
+```
+
+Дополнительные параметры подключения задаются через стандартные переменные Rocket. `API_RATE_LIMIT_RPM` управляет лимитом запросов JSON API.
+
+## JSON API
+
+Проверка доступна по `GET /api/v1/check?target=example.org`. `target` может быть доменом или IP-адресом. Успешный ответ содержит исходную цель, тип, итоговый признак `blocked`, найденные IP/подсети, сведения CDN, GeoIP/ASN и данные белого списка, если они есть.
+
+```bash
+curl --get 'http://localhost:8000/api/v1/check' \
+  --data-urlencode 'target=example.org'
+```
+
+API возвращает `404`, если цель не найдена, `429` при превышении лимита и `500` при внутренней ошибке.
+
 ---
 
 ## Вклад
